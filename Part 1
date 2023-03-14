@@ -1,0 +1,358 @@
+I needed to clean the data in excel a little bit- changing the date format and adding a new column that could be used as the primary key to get the data into mySQL server. I also spent about 10 hours figuring out how to get into the inner files of MySQL and rewrite the settings so I could quickly upload data, because the way I have been using would have taken me about 3 days just to upload.
+—----------------------------------------------------------------------------------------------
+
+Initializing in the command Client: 
+
+USE sales;
+
+mysql> CREATE TABLE sales2(  Store int,  dept int,  Date datetime,  Weekly_Sales double,  IsHoliday varchar(45),  entry int NOT NULL,  PRIMARY KEY (entry) );
+Query OK, 0 rows affected (0.02 sec)
+
+mysql> LOAD DATA LOCAL INFILE "C:/Users/kanel/Documents/salesdata/sales.csv"INTO TABLE `sales2`FIELDS TERMINATED BY ',' ENCLOSED BY '"' LINES TERMINATED BY '\r\n' IGNORE 1 LINES;
+Query OK, 421570 rows affected (5.20 sec)
+Records: 421570  Deleted: 0  Skipped: 0  Warnings: 0
+
+Edit:
+ALTER TABLE `sales`.`sales1` 
+RENAME TO  `sales`.`sales` ;
+—-------------------------------------------------------------------------------------------------
+
+What date range are we dealing with in these spreadsheets?
+
+SELECT MIN(Date), MAX(Date)
+FROM `sales`
+2010-02-05- 2012-10-26
+
+FROM `features`
+2010-02-05-  2013-04-26 
+
+So, they are not the same date range. 
+
+A question that I have about the data is what do the A, B, and C store types mean? This is a potential answer, but it is not straightforward: https://www.yourarticlelibrary.com/retailing/retailing-in-india/retail-store-classification-2-categories-retailing/87239 
+
+There are indeed only the three types: 
+SELECT COUNT(DISTINCT Type)
+FROM `stores`
+
+Let’s see if there is a difference in sales between these three store types.  
+WITH new AS
+(SELECT b.Store, a.Type, a.Size, b.Weekly_Sales
+FROM `sales` as b
+JOIN `stores` as a
+ON a.Store = b.Store)
+SELECT Type, AVG(size), AVG(Weekly_Sales)
+FROM `new`
+GROUP BY Type
+
+
+Not a huge difference. 
+
+
+Let’s look at how much each of these stores are selling in a year: 
+SELECT Store, SUM(Weekly_Sales) as annual_sales
+FROM `sales`
+WHERE Date BETWEEN '2010-02-05' AND '2011-02-05'
+GROUP BY Store
+
+
+
+
+So we know our top performers and worst performers in this date range. 
+
+Who is our best performing store (all time)?
+SELECT Store, SUM(Weekly_Sales) as total_sales
+FROM `sales`
+GROUP BY Store
+ORDER BY total_sales DESC
+LIMIT 1
+# Store	total_sales
+20	301397792.45999974
+
+Who is the worst?
+# Store	total_sales
+33	37160221.96
+
+
+How does each department do in the best performing store?
+SELECT Store, dept, SUM(Weekly_Sales) as total_sales
+FROM `sales`
+WHERE Store = '20'
+GROUP BY dept
+ORDER BY total_sales ASC
+
+# Store	dept	total_sales
+
+
+It seems like there is a department that loses money- perhaps this is returns? This is pretty low for returns however. There is also some departments that are scoring pretty low. I would want to ask more questions about what might be going on with these departments. 
+
+Let’s see how our most poorly performing store is doing:
+# Store	dept	total_sales
+
+Again, I have questions about some of these lowest selling departments. 
+
+
+Let’s see how different variables impact sales in our stores:
+Holidays:
+
+SELECT Store, AVG(Weekly_Sales) as average_sales, IsHoliday
+FROM `sales`
+GROUP BY Store, IsHoliday
+ORDER BY Store
+
+# Store 	average_sales	 IsHoliday
+
+
+
+
+Let’s look at temperature and sales for just store 33 (Top seller):
+
+WITH temp_33 AS
+(SELECT Store, Date, 
+CASE WHEN Temperature <30 THEN 'cold'
+	WHEN Temperature >=30 AND Temperature <80 THEN 'normal'
+	ELSE 'hot'
+    END AS temp_cat
+FROM `features`
+WHERE Store = '33' AND Date < '2012-10-26'
+ORDER BY date asc),
+store_33 AS
+(SELECT Store, Date, SUM(Weekly_Sales) as sales
+FROM `sales`
+WHERE Store = '33'
+GROUP BY Date)
+SELECT a.store, a.Date, a.temp_cat, b.sales
+FROM `temp_33` as a
+JOIN store_33 as b
+ON a.Date=b.Date
+ORDER BY a.Date ASC, b.sales DESC
+
+From this table, is there big variability based on temperature?
+
+SELECT temp_cat, AVG(sales)
+FROM `combined_33_temp`
+GROUP BY temp
+
+# temp_cat	AVG(sales)
+normal	261262.48103896104
+hot	258296.61215384607
+
+
+Not really.
+
+
+Ok- let’s just combine each of our special variables into a table that can be easily pulled from.
+
+WITH store_33 AS
+(SELECT Date, SUM(Weekly_Sales) as total
+FROM `sales`
+WHERE Store = '33'
+GROUP BY `Date`),
+features_33 AS
+(SELECT date, Temperature, Fuel_Price, CPI, Unemployment
+FROM `features`
+WHERE Store = '33')
+SELECT a.date, a.Temperature, a.Fuel_Price, a.CPI, a.Unemployment, b.total
+FROM `features_33` as a
+JOIN `store_33` as b
+ON a.date = b.Date
+
+> save table as “combined_33”
+
+
+Let’s look at unemployment:
+
+SELECT MAX(Unemployment), MIN(Unemployment)
+FROM `combined_33`
+
+# MAX(Unemployment)	MIN(Unemployment)
+10.115  	6.895
+
+WITH unemployment AS
+(SELECT date, total,
+CASE WHEN Unemployment < 7.8 THEN 'low'
+	WHEN Unemployment >= 8 AND Unemployment < 9.5 THEN 'middle'
+    ELSE 'high'
+    END AS unemployment_cat
+FROM `combined_33`)
+SELECT AVG(total) as 'average sales', unemployment_cat
+FROM `unemployment`
+GROUP BY unemployment_cat
+
+# average sales	        unemployment_cat
+290723.36428571434	high
+248347.8516455697	middle
+265943.0472093023	low
+
+
+Unemployment does seem to have an impact on sales, but I think I would want to run something like a pearson’s r on this to get more information. Surprisingly, sales were lowest when unemployment was in the “middle”.
+
+Ok, fuel:
+Fuel price: 2.825- 4.468
+
+WITH fuel AS
+(SELECT date, total,
+CASE WHEN Fuel_Price > 4.1 THEN 'high'
+	WHEN Fuel_Price <= 4.1 AND Fuel_Price > 3.1 THEN 'middle'
+    ELSE 'low'
+    END AS fuel_cat
+FROM `combined_33`)
+SELECT AVG(total) as 'average sales', fuel_cat
+FROM `fuel`
+GROUP BY fuel_cat
+# average sales	      fuel_cat
+265,172.15857142856 	low
+255,063.93919540226 	middle
+270,887.31904761906 	high
+
+These were more even- but interestingly the “middle” category was again the lowest. I wonder if this is a reflection of the social/economic trends, or a paucity of data.
+
+I added a “number of records” for each category by adding to the select statement: COUNT(fuel_cat) as num_of_records
+
+It came up with this: 
+# average sales	fuel_cat	num_of_records
+265172.15857142856	 low	           35
+255063.93919540226	 middle 	87
+270887.31904761906 	high	21
+
+So actually, there is the most records in that middle category, which would fit with the bell curve assumptions I made when labeling the “high/low” categories.
+
+
+CPI:
+From '126.064' - '131.1930968'
+
+WITH CPI AS
+(SELECT date, total,
+CASE WHEN CPI > 129 THEN 'high'
+	WHEN CPI <= 129 AND CPI > 127.5 THEN 'middle'
+    ELSE 'low'
+    END AS CPI_cat
+FROM `combined_33`)
+SELECT AVG(total) as 'average sales', CPI_cat, COUNT(CPI_cat) as num_of_records
+FROM `CPI`
+GROUP BY CPI_cat
+
+# average sales	CPI_cat	num_of_records
+265,003.2798039216     	 low	51
+251,150.55785714282 	middle	14
+258,063.42153846152 	high	78
+
+Interestingly, yet again the middle category has the lowest average sales- but this time it also has the lowest number of records. Adjusting the “high” category to cut off at 129.5 instead of 129:
+
+# average sales	CPI_cat	num_of_records
+265,003.2798039216   	low	51
+250,246.87588235294 	middle	34
+260,976.91224137938 	high	58
+
+Same trend- these are all fairly similar as well. 
+
+Let’s run those numbers with the store that sold the most:
+
+WITH store_20 AS
+(SELECT Date, SUM(Weekly_Sales) as total
+FROM `sales`
+WHERE Store = '20'
+GROUP BY `Date`),
+features_20 AS
+(SELECT date, Temperature, Fuel_Price, CPI, Unemployment
+FROM `features`
+WHERE Store = '20')
+SELECT a.date, a.Temperature, a.Fuel_Price, a.CPI, a.Unemployment, b.total
+FROM `features_20` as a
+JOIN `store_20` as b
+ON a.date = b.Date
+
+> saved as combined_20
+
+unemployment:
+WITH unemployment AS
+(SELECT date, total,
+CASE WHEN Unemployment < 7.8 THEN 'low'
+	WHEN Unemployment >= 8 AND Unemployment < 9.5 THEN 'middle'
+    ELSE 'high'
+    END AS unemployment_cat
+FROM `combined_20`)
+SELECT AVG(total), unemployment_cat
+FROM `unemployment`
+GROUP BY unemployment_cat
+
+
+# AVG(total)	unemployment_cat
+2,068,378.3774999995	middle
+2,053,552.0146153844	high
+2,116,021.223360656	       low
+
+I used the same numbers as before, because it is the same date range.
+It looks like there is more consistency with this one.
+
+
+With fuel AS 
+(SELECT date, total,
+CASE WHEN Fuel_Price > 4.1 THEN 'high'
+	WHEN Fuel_Price <= 4.1 AND Fuel_Price > 3.1 THEN 'middle'
+    ELSE 'low'
+    END AS fuel_cat
+FROM `combined_20`)
+SELECT AVG(total) as 'average sales', fuel_cat
+FROM `fuel`
+GROUP BY fuel_cat
+# average sales	fuel_cat
+2058985.0056818181	low
+2129317.6990909097	middle
+
+It looks like I need to adjust the fuel numbers?
+Max/min-
+'4.066', '2.699'
+
+With fuel AS 
+(SELECT date, total,
+CASE WHEN Fuel_Price > 3.7 THEN 'high'
+	WHEN Fuel_Price <= 3.7 AND Fuel_Price > 3.0 THEN 'middle'
+    ELSE 'low'
+    END AS fuel_cat
+FROM `combined_20`)
+SELECT AVG(total) as 'average sales', fuel_cat
+FROM `fuel`
+GROUP BY fuel_cat
+# average sales	fuel_cat
+2,032,563.215238095	low
+2,220,426.9620408164	middle
+2,062,100.3130769236	high
+
+
+
+WITH CPI AS
+(SELECT date, total,
+CASE WHEN CPI > 129 THEN 'high'
+	WHEN CPI <= 129 AND CPI > 127.5 THEN 'middle'
+    ELSE 'low'
+    END AS CPI_cat
+FROM `combined_20`)
+SELECT AVG(total) as 'average sales', CPI_cat, COUNT(CPI_cat) as num_of_records
+FROM `CPI`
+GROUP BY CPI_cat
+# average sales	CPI_cat	num_of_records
+2107676.8703496503	     high	143
+
+Ok what is the range here?
+'216.1515902', '203.6101784'
+
+
+WITH CPI AS
+(SELECT date, total,
+CASE WHEN CPI > 212 THEN 'high'
+	WHEN CPI <= 212 AND CPI > 207 THEN 'middle'
+    ELSE 'low'
+    END AS CPI_cat
+FROM `combined_20`)
+SELECT AVG(total) as 'average sales', CPI_cat, COUNT(CPI_cat) as num_of_records
+FROM `CPI`
+GROUP BY CPI_cat
+# average sales	CPI_cat	num_of_records
+2,103,630.694736842	low	57
+2,082,542.5199999996	middle	40
+2,134,546.566521739	high	46
+
+
+
+
+
