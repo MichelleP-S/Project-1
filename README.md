@@ -1,5 +1,5 @@
 # ecommerce-project
-Ecommerce is a huge space! Since I have a vested interest in getting into the ecommerce space, I wanted to test my SQL skills on a project utilizing a few different tables about sales data.
+Ecommerce is a huge space and I wanted to test my SQL skills on a project utilizing a few different tables about sales data.
 
 Query types used:
 - count(distinct)
